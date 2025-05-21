@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "pdf-to-anki-flashcard-generator"
+version = "0.1.0"
+description = "A CLI tool to automatically convert PDF lecture notes into Anki flashcards."
+authors = ["RCXDd <akrouchbilal@gmail.com>"]
+readme = "README.md"
+packages = [{include = "pdf_to_anki_flashcard_generator"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pymupdf = "^1.24.1"
+click = "^8.1.7"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.0"
+
+[tool.poetry.scripts]
+ankicardgen = "pdf_to_anki_flashcard_generator.main:cli"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
