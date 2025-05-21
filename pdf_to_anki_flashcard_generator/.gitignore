@@ -1,5 +1,6 @@
 # Environment variables
 .env
+/pdf_to_anki_flashcard_generator/.env
 
 # Python
 __pycache__/
