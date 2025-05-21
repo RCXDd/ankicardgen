@@ -88,57 +88,125 @@ def segment_text_to_chunks(text: str, max_chars: int) -> list[str]:
     
     return chunks
 
-def _parse_qna_from_llm_response(llm_response: str) -> tuple[str | None, str | None]:
-    """Parses Question and Answer from LLM response. Expects 'Q: ...\nA: ...' format."""
+def _parse_multiple_qna_from_llm_response(llm_response: str) -> list[tuple[str, str]]:
+    """Parses multiple Question and Answer pairs from LLM response. 
+    Returns a list of (question, answer) tuples.
+    Also handles SKIP responses when a chunk is not suitable for flashcard creation."""
+    
+    # Check if the LLM decided to skip this chunk entirely
+    if llm_response.upper().startswith("SKIP:"):
+        skip_reason = llm_response[5:].strip()  # Extract reason after "SKIP:"
+        click.echo(f" Skipping: {skip_reason}")
+        return []  # Empty list indicates no cards were generated
+    
+    # Look for multiple card markers
+    if "CARD " in llm_response.upper() and ("Q:" in llm_response or "A:" in llm_response):
+        cards = []
+        # Attempt to split by "CARD X:" pattern or similar
+        card_blocks = re.split(r'CARD\s+\d+[:.]', llm_response)
+        
+        # If the split worked, process each card block
+        if len(card_blocks) > 1:
+            # First element might be empty or preamble
+            card_blocks = [block for block in card_blocks if block.strip()]
+            
+            for block in card_blocks:
+                q_match = re.search(r'(?:^|\n)Q:\s*(.*?)(?=\n[A]:|$)', block, re.DOTALL)
+                a_match = re.search(r'(?:^|\n)A:\s*(.*?)(?=\n[Q]:|$)', block, re.DOTALL)
+                
+                if q_match and a_match:
+                    question = q_match.group(1).strip()
+                    answer = a_match.group(1).strip()
+                    if question and answer:
+                        cards.append((question, answer))
+            
+            if cards:
+                return cards
+    
+    # Fallback to single card parsing if the above didn't work
     question = None
     answer = None
     lines = llm_response.strip().split('\n')
     
-    for line in lines:
+    for i, line in enumerate(lines):
         if line.lower().startswith("q:"):
             question = line[2:].strip()
         elif line.lower().startswith("a:"):
             answer = line[2:].strip()
-            break # Assume Q precedes A and we only want the first pair
+            # If we found a Q/A pair, return it as a single card
+            if question and answer:
+                return [(question, answer)]
+            break
     
-    if question and answer:
-        return question, answer
-    return None, None # Return None if parsing fails
+    # No valid cards found
+    return []
 
-def _generate_qna_from_chunk_via_llm(client: OpenAI, text_chunk: str, model: str, anki_model_name: str) -> tuple[str | None, str | None]:
-    """Generates a Q/A pair from a text chunk using LLM. Returns (question, answer) or (None, None)."""
+def _generate_multiple_qna_from_chunk_via_llm(client: OpenAI, text_chunk: str, model: str, anki_model_name: str) -> list[tuple[str, str]]:
+    """Generates multiple Q/A pairs from a text chunk using LLM.
+    Returns a list of (question, answer) tuples."""
     try:
-        # Updated prompt to enforce German output
-        prompt_template = f"""Analysiere den folgenden Text und erstelle eine prägnante Frage und eine passende Antwort auf DEUTSCH. Diese sind für eine Anki-Lernkartei mit den Feldnamen des Modells '{anki_model_name}' gedacht.
-Antworte ausschließlich im folgenden Format:
-Q: [Deine Frage auf Deutsch]
-A: [Deine Antwort auf Deutsch]
+        # Enhanced prompt for multiple card extraction
+        prompt_template = f"""Erstelle evidenzbasierte Karteikarten auf Deutsch zum folgenden Text über Algorithmen und Datenstrukturen.
 
-Text: {{chunk}}"""
+WISSENSCHAFTLICHE BASIS & BEGRÜNDUNG:
+- Der "Testing Effect" belegt, dass aktives Wissensabrufen die Gedächtnisleistung stärker fördert als passives Wiederholen
+- Die "Kognitive Belastungstheorie" zeigt, dass atomare Inhalte (ein Konzept pro Karte) die intrinsische kognitive Belastung reduzieren
+- "Spaced Repetition" und optimale Wiederholungsintervalle werden durch klare, eindeutige Fragen unterstützt
+- Meta-Analysen belegen, dass explizite Frageformulierungen mit klaren Subjekten und Prädikaten den Abruferfolg steigern
+
+WICHTIG - QUALITÄT UND ATOMARITÄT:
+- Analysiere den Text und identifiziere einzelne, spezifische Konzepte, Fakten oder Definitionen
+- Erstelle für JEDES relevante Konzept EINE separate Karteikarte (1-5 Karten pro Text)
+- Jede Karte sollte EINEN atomaren Inhalt behandeln (genau ein Konzept, kein Vermischen)
+- Achte darauf, dass jede Karte für sich stehen kann und vollständig ist
+
+NUR wenn der Text absolut KEINE brauchbaren Konzepte enthält:
+SKIP: [Kurze Begründung, warum keine Karteikarte möglich ist]
+
+PRÄZISE ANWEISUNGEN FÜR JEDE KARTEIKARTE:
+1. EXPLIZITE FRAGE: Formuliere eine spezifische Frage mit klarem Subjekt und Prädikat
+2. AKTIVER ABRUF: Die Frage muss aktives Wissen abrufen, nicht nur passives Erkennen ermöglichen
+3. PRÄZISE ANTWORT: Die Antwort muss vollständig, aber ohne überflüssige Informationen sein
+4. MATHEMATISCHE KLARHEIT: Bei Formeln nutze LaTeX-Syntax mit $ (z.B. $O(n^2)$)
+5. ANWENDUNGSBEISPIEL: Bei abstrakteren Konzepten füge EIN kurzes Anwendungsbeispiel hinzu
+
+AUSGABEFORMAT:
+CARD 1:
+Q: [Deine erste evidenzbasierte Frage auf Deutsch]
+A: [Deine präzise Antwort auf Deutsch]
+
+CARD 2:
+Q: [Deine zweite evidenzbasierte Frage auf Deutsch]
+A: [Deine präzise Antwort auf Deutsch]
+
+Usw. für jedes Konzept, das du identifizierst (max. 5 Karten pro Text).
+
+INPUT-TEXT:
+{{chunk}}"""
         
         completion = client.chat.completions.create(
             model=model,
             messages=[
                 {
                     "role": "system",
-                    "content": "Du bist ein Experte im Erstellen von Lernkarten. Alle von dir generierten Inhalte (Fragen und Antworten) MÜSSEN auf DEUTSCH sein. Erstelle präzise und korrekte Frage-Antwort-Paare auf DEUTSCH. Stelle sicher, dass Frage und Antwort unterschiedlich sind und ein logisches Paar zum Lernen bilden."
+                    "content": "Du bist ein Experte für wissenschaftlich fundierte Lernmethoden und Gedächtnisforschung mit Spezialwissen in aktiver Wissensabruf-Praxis (Testing Effect), Spaced Repetition und kognitiver Belastungstheorie. Deine Aufgabe ist es, komplexe Informationen in mehrere atomare, evidenzbasierte Anki-Karteikarten zu zerlegen, die jeweils genau ein Konzept abdecken. Du erzeugst ausschließlich Karteikarten auf Deutsch für den Bereich Informatik/Algorithmen."
                 },
                 {
                     "role": "user", 
                     "content": prompt_template.format(chunk=text_chunk)
                 }
             ],
-            temperature=0.5 # Adjust for creativity vs. predictability
+            temperature=0.2 # Etwas höhere Temperatur für mehr Kreativität bei der Zerlegung
         )
         
         llm_response = completion.choices[0].message.content
         if llm_response:
-            return _parse_qna_from_llm_response(llm_response)
-        return None, None
+            return _parse_multiple_qna_from_llm_response(llm_response)
+        return []
 
     except Exception as e:
         click.echo(f"Warning: LLM request failed for a chunk: {e}", err=True)
-        return None, None
+        return []
 
 @click.group()
 def cli():
@@ -210,19 +278,30 @@ def process_pdf_to_anki(pdf_path: str, output_file: str, deck_name: str, model: 
         )
 
         click.echo(f"Generating flashcards using Openrouter model: {model}...")
-        successful_cards = 0
+        total_cards_generated = 0
+        skipped_chunks = 0
+        failed_chunks = 0
+        
         for i, chunk in enumerate(chunks):
             click.echo(f"Processing chunk {i+1}/{len(chunks)}...", nl=False)
-            question, answer = _generate_qna_from_chunk_via_llm(client, chunk, model, anki_model_name)
-            if question and answer:
-                note = genanki.Note(model=anki_card_model, fields=[question, answer])
-                anki_deck.add_note(note)
-                successful_cards += 1
-                click.echo(" Card generated.")
+            cards = _generate_multiple_qna_from_chunk_via_llm(client, chunk, model, anki_model_name)
+            
+            if cards:
+                click.echo(f" Generated {len(cards)} cards.")
+                for j, (question, answer) in enumerate(cards):
+                    note = genanki.Note(model=anki_card_model, fields=[question, answer])
+                    anki_deck.add_note(note)
+                total_cards_generated += len(cards)
             else:
-                click.echo(" Failed to generate/parse card for this chunk.")
+                # Entweder wurde der Chunk übersprungen (wird bereits in _parse_multiple_qna_from_llm_response ausgegeben)
+                # oder es gab einen technischen Fehler
+                if " Skipping: " not in str(click.get_text_stream('stdout')):
+                    click.echo(" Failed to generate any cards for this chunk.")
+                    failed_chunks += 1
+                else:
+                    skipped_chunks += 1
         
-        if successful_cards == 0:
+        if total_cards_generated == 0:
             click.echo("No flashcards were successfully generated. No .apkg file will be created.")
             return
 
@@ -232,8 +311,11 @@ def process_pdf_to_anki(pdf_path: str, output_file: str, deck_name: str, model: 
             output_file += ".apkg"
             
         genanki_package.write_to_file(output_file)
-        click.echo(f"\nSuccessfully generated {successful_cards} flashcards.")
-        click.echo(f"Anki deck '{deck_name}' saved to: {os.path.abspath(output_file)}")
+        click.echo(f"\nErfolgreiche Verarbeitung:")
+        click.echo(f"- {total_cards_generated} Karteikarten generiert")
+        click.echo(f"- {skipped_chunks} Chunks übersprungen (da nicht karteikartenwürdig)")
+        click.echo(f"- {failed_chunks} Chunks fehlgeschlagen (technische Fehler)")
+        click.echo(f"- Anki-Deck '{deck_name}' gespeichert: {os.path.abspath(output_file)}")
 
     except click.ClickException as e: 
         click.echo(f"Error: {e}", err=True)
