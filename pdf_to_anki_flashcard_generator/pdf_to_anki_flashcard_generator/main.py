@@ -145,7 +145,7 @@ def _generate_multiple_qna_from_chunk_via_llm(client: OpenAI, text_chunk: str, m
     """Generates multiple Q/A pairs from a text chunk using LLM.
     Returns a list of (question, answer) tuples."""
     try:
-        # Enhanced prompt for multiple card extraction
+        # Enhanced prompt for multiple card extraction with improved LaTeX instructions
         prompt_template = f"""Erstelle evidenzbasierte Karteikarten auf Deutsch zum folgenden Text über Algorithmen und Datenstrukturen.
 
 WISSENSCHAFTLICHE BASIS & BEGRÜNDUNG:
@@ -160,6 +160,16 @@ WICHTIG - QUALITÄT UND ATOMARITÄT:
 - Jede Karte sollte EINEN atomaren Inhalt behandeln (genau ein Konzept, kein Vermischen)
 - Achte darauf, dass jede Karte für sich stehen kann und vollständig ist
 
+STRENGE FORMATTING-REGELN FÜR MATHEMATISCHE NOTATION:
+- Mathematische Ausdrücke MÜSSEN in LaTeX-Syntax mit \( \) für inline oder \[ \] für display stehen: \(O(n^2)\)
+- Wichtig: Verwende \(O(n)\) und NICHT O(n) für Big-O-Notation
+- Stelle sicher, dass ALLE mathematischen Ausdrücke, Komplexitätsklassen, und Formeln von \( \) umschlossen sind
+- Beispiele für korrekte Notation:
+  * Richtig: Die Zeitkomplexität beträgt \(O(n^2)\)
+  * Falsch: Die Zeitkomplexität beträgt O(n^2) (ohne \( \)-Zeichen)
+  * Richtig: \(\Theta(n \log n)\) ist die Komplexität...
+  * Richtig: Die Laufzeit ist in \(O(1)\)
+
 NUR wenn der Text absolut KEINE brauchbaren Konzepte enthält:
 SKIP: [Kurze Begründung, warum keine Karteikarte möglich ist]
 
@@ -167,7 +177,7 @@ PRÄZISE ANWEISUNGEN FÜR JEDE KARTEIKARTE:
 1. EXPLIZITE FRAGE: Formuliere eine spezifische Frage mit klarem Subjekt und Prädikat
 2. AKTIVER ABRUF: Die Frage muss aktives Wissen abrufen, nicht nur passives Erkennen ermöglichen
 3. PRÄZISE ANTWORT: Die Antwort muss vollständig, aber ohne überflüssige Informationen sein
-4. MATHEMATISCHE KLARHEIT: Bei Formeln nutze LaTeX-Syntax mit $ (z.B. $O(n^2)$)
+4. MATHEMATISCHE KLARHEIT: Verwende immer \(...\) für ALLE inline mathematischen Ausdrücke und \[...\] für ALLE display mathematischen Ausdrücke
 5. ANWENDUNGSBEISPIEL: Bei abstrakteren Konzepten füge EIN kurzes Anwendungsbeispiel hinzu
 
 AUSGABEFORMAT:
@@ -189,7 +199,7 @@ INPUT-TEXT:
             messages=[
                 {
                     "role": "system",
-                    "content": "Du bist ein Experte für wissenschaftlich fundierte Lernmethoden und Gedächtnisforschung mit Spezialwissen in aktiver Wissensabruf-Praxis (Testing Effect), Spaced Repetition und kognitiver Belastungstheorie. Deine Aufgabe ist es, komplexe Informationen in mehrere atomare, evidenzbasierte Anki-Karteikarten zu zerlegen, die jeweils genau ein Konzept abdecken. Du erzeugst ausschließlich Karteikarten auf Deutsch für den Bereich Informatik/Algorithmen."
+                    "content": "Du bist ein Experte für wissenschaftlich fundierte Lernmethoden und Gedächtnisforschung mit Spezialwissen in aktiver Wissensabruf-Praxis (Testing Effect), Spaced Repetition und kognitiver Belastungstheorie. Deine Aufgabe ist es, komplexe Informationen in mehrere atomare, evidenzbasierte Anki-Karteikarten zu zerlegen, die jeweils genau ein Konzept abdecken. Du erzeugst ausschließlich Karteikarten auf Deutsch für den Bereich Informatik/Algorithmen. Wichtig: Nutze für alle mathematischen Ausdrücke und Formeln die korrekte LaTeX-Syntax mit \\( und \\) für inline-Formeln oder \\[ und \\] für display-Formeln."
                 },
                 {
                     "role": "user", 
@@ -267,10 +277,35 @@ def process_pdf_to_anki(pdf_path: str, output_file: str, deck_name: str, model: 
             templates=[
                 {
                     'name': 'Card 1',
-                    'qfmt': '{{Question}}',
-                    'afmt': '{{FrontSide}}<hr id="answer">{{Answer}}',
+                    'qfmt': '''
+<div class="question">{{Question}}</div>
+''',
+                    'afmt': '''
+<div class="question">{{Question}}</div>
+<hr id="answer">
+<div class="answer">{{Answer}}</div>
+''',
                 },
-            ])
+            ],
+            css='''
+.card {
+    font-family: arial;
+    font-size: 20px;
+    text-align: left;
+    color: black;
+    background-color: white;
+    padding: 20px;
+}
+.question {
+    margin-bottom: 10px;
+}
+.answer {
+    margin-top: 10px;
+}
+.MathJax {
+    font-size: 115%;
+}
+''')
 
         anki_deck = genanki.Deck(
             deck_id=generate_unique_id(deck_name), # Unique ID for the deck
